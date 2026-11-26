@@ -1,0 +1,10 @@
+# Documentation, compiler, and example outputs
+/build/
+/conformance
+/behavior
+/example
+*.o
+*.obj
+*.exe
+*.elf
+*.hex

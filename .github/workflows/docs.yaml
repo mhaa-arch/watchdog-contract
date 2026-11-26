@@ -1,0 +1,93 @@
+name: Documentation
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: >-
+      (github.event_name == 'release' && github.event.action == 'published') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: read
+
+    steps:
+      - name: Checkout event commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Install Doxygen
+        env:
+          DOXYGEN_VERSION: '1.18.0'
+        run: |
+          set -euo pipefail
+          release="Release_${DOXYGEN_VERSION//./_}"
+          archive="doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 \
+            "https://github.com/doxygen/doxygen/releases/download/$release/$archive" \
+            --output "$RUNNER_TEMP/$archive"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
+          bin="$RUNNER_TEMP/doxygen-$DOXYGEN_VERSION/bin"
+          version="$("$bin/doxygen" --version)"
+          test "${version%% *}" = "$DOXYGEN_VERSION"
+          printf '%s\n' "$bin" >> "$GITHUB_PATH"
+
+      - name: Generate documentation
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          commit="$(git rev-parse HEAD)"
+          test "$commit" = "$GITHUB_SHA"
+          if [[ "$GITHUB_EVENT_NAME" == release ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="main @ ${commit:0:12}"
+          fi
+          {
+            cat Doxyfile
+            printf '\nPROJECT_NUMBER = "%s"\n' "${version//\"/\\\"}"
+          } | doxygen -
+
+      - name: Verify generated site and resolve source links
+        run: |
+          set -euo pipefail
+          test -s build/docs/html/index.html
+          source_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA"
+          find build/docs/html -type f -name '*.html' -exec \
+            sed -i -E "s#href=\"\\.\\./(include|examples|tests)/#href=\"$source_url/\\1/#g" {} +
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/docs/html
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
